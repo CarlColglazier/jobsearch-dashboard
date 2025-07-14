@@ -1,0 +1,14 @@
+[project]
+name = "jobsearch-dashboard"
+version = "0.1.0"
+description = "Dashboard for tracking job applications using Shiny"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "altair>=5.5.0",
+    "jupyter>=1.1.1",
+    "pandas>=2.3.1",
+    "plotly>=6.2.0",
+    "shiny>=1.4.0",
+    "shinywidgets>=0.6.2",
+]

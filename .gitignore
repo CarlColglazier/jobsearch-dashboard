@@ -1,0 +1,9 @@
+/.quarto/
+.DS_Store
+.python-version
+index.html
+index_files/
+.venv/
+.quarto/
+__pycache__/
+applications.csv

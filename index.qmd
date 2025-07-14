@@ -1,0 +1,221 @@
+---
+title: "Job Search Dashboard"
+format: dashboard
+server: shiny
+---
+
+
+```{python}
+#| context: setup
+#| label: setup
+
+import pandas as pd
+import altair as alt
+from shiny import render, ui
+from shinywidgets import render_altair, render_widget
+from shiny import reactive
+from shiny.express import input, render, ui as express_ui
+
+MAIN_COLOR = "#1D5A8E"
+
+#dir = pathlib.Path(__file__)
+@reactive.file_reader("applications.csv")
+def read_file():
+    return pd.read_csv("applications.csv")
+
+#@render.data_frame
+def process_calendar_data():
+    data = read_file()
+    data['Date'] = pd.to_datetime(data['Date'])
+    # Columns: Company,Position,Link,Status,Date
+    # Count applications by date
+    date_counts = data.groupby('Date').size().reset_index(name='Count')
+    # Create a full date range
+    start_date = data['Date'].min()
+    end_date = data['Date'].max()
+    date_range = pd.date_range(start=start_date, end=end_date)
+    full_date_df = pd.DataFrame({'Date': date_range})
+    # Merge to include dates with zero applications
+    full_date_counts = pd.merge(full_date_df, date_counts, on='Date', how='left').fillna(0)
+    # Extract day of week and week number
+    full_date_counts['DayOfWeek'] = full_date_counts['Date'].dt.dayofweek
+    full_date_counts['WeekNum'] = full_date_counts['Date'].dt.isocalendar().week
+    full_date_counts['Month'] = full_date_counts['Date'].dt.month_name()
+    full_date_counts['DayOfMonth'] = full_date_counts['Date'].dt.day
+    # Adjust week numbers for calendar year display
+    min_week = full_date_counts['WeekNum'].min()
+    full_date_counts['WeekNumAdjusted'] = full_date_counts['WeekNum'] - min_week
+    return full_date_counts
+```
+
+# Plot
+
+::: {layout-ncol="2"}
+
+```{python}
+#| label: line
+@render_altair
+def line_plot():
+    # Applications by date
+    data = read_file()
+    date_counts = data.groupby('Date').size().reset_index(name='Count')
+    chart = alt.Chart(date_counts).mark_line(
+        interpolate='step-after',
+        color=MAIN_COLOR,
+    ).transform_window(
+        sort=[{'field': 'Date'}],
+        Applications='sum(Count)'
+    ).encode(
+        x='Date:T',
+        y='Applications:Q'
+    ).properties(
+        width='container',
+        height='container'
+    )
+    return chart
+```
+
+
+```{python}
+#| label: calendar
+@render_altair
+def calendar_plot():
+    # Applications by date
+    full_date_counts = process_calendar_data()
+    chart = alt.Chart(full_date_counts).mark_rect().encode(
+    alt.X('WeekNumAdjusted:O', title='Week', axis=alt.Axis(labels=False, ticks=False, domain=False)),
+    alt.Y('DayOfWeek:O', 
+          title='', 
+          sort=list(range(7)),  # Sort days from Monday to Sunday
+          axis=alt.Axis(
+            labels=True,
+            ticks=False, 
+            domain=False, 
+            labelExpr="datum.value === 0 ? 'Mon' : datum.value === 1 ? 'Tue' : datum.value === 2 ? 'Wed' : datum.value === 3 ? 'Thu' : datum.value === 4 ? 'Fri' : datum.value === 5 ? 'Sat' : 'Sun'")),
+    alt.Color('Count:Q', 
+              scale=alt.Scale(domain=[0, 1, 10],
+                              range=['#FFFFFF', '#EEEEEE', MAIN_COLOR]),
+              legend=alt.Legend(title='Applications')),
+    tooltip=['Date:T', 'Count:Q']
+    ).properties(
+        width='container',
+        height='container'
+    )
+    return chart
+```
+
+```{python}
+#| label: sankey
+import plotly.graph_objects as go
+@render_widget
+def sankey_plot():
+    data = read_file()
+    count_applications = len(data)
+    count_rejected = data[data["Status"] == "Rejected"].shape[0]
+    count_applied = data[data["Status"] == "Applied"].shape[0]
+    count_offered = data[data["Status"] == "Offered"].shape[0]
+    count_interview = data[data["Status"] == "Interview"].shape[0] + count_offered
+    count_screener = data[data["Status"] == "Screener"].shape[0] + count_interview
+    count_accepted = data[data["Status"] == "Accepted"].shape[0]
+    fig = go.Figure(data=[go.Sankey(
+    node = dict(
+        pad = 15,
+        thickness = 20,
+        label = [
+            f"Applications ({count_applications})",
+            f"Rejected ({count_rejected})", 
+            f"No Response ({count_applied})",
+            f"Interview ({count_interview})",
+            f"Screener ({count_screener})",
+            f"Offered ({count_offered})",
+        ],
+        #x = [0, 0.5, 0.0, 0.75, 0.5, 1.0],
+        #y = [0, 0.75, 0.0, 0.95, 1.0, 1.0],
+        color = MAIN_COLOR,
+    ),
+    link = dict(
+        source = [0, 0, 0, 4, 3],
+        target = [1, 2, 4, 3, 5],
+        value = [count_rejected, count_applied, count_screener, count_interview, count_offered],
+        color = "light gray",
+    ))])
+    fig.update_layout(
+        autosize=True,
+    )
+    return fig
+```
+
+:::
+
+# Jobs
+
+```{python}
+#| label: job-table
+@render.data_frame
+def display():
+    data = read_file()
+    data["PositionLink"] = data.apply(lambda x: ui.HTML(f'<a href="{x["Link"]}" target="_blank">{x["Position"]}</a>'), axis=1)
+    return render.DataGrid(data[["Company", "PositionLink", "Status", "Date"]])
+```
+
+# Data Entry {.sidebar width="400px"}
+
+```{python}
+#| label: data-entry
+
+from datetime import datetime
+
+STATUS_OPTIONS = ["Applied", "Rejected", "Screener", "Interview", "Offered", "Accepted"]
+
+
+def append_application(company, position, link, status, date):
+    # Read existing data
+    try:
+        df = pd.read_csv("applications.csv")
+    except FileNotFoundError:
+        df = pd.DataFrame(columns=["Company", "Position", "Link", "Status", "Date", "LastUpdated"])
+    
+    # Create new row with current timestamp
+    new_row = pd.DataFrame({
+        "Company": [company],
+        "Position": [position],
+        "Link": [link],
+        "Status": [status],
+        "Date": [date],
+        "LastUpdated": [date]
+    })
+    
+    # Append and save
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv("applications.csv", index=False)
+
+
+ui.input_text("company", "Company Name", placeholder="Enter company name")
+ui.input_text("position", "Position", placeholder="Enter position title")
+ui.input_text("link", "Link", placeholder="Enter job posting URL")
+ui.input_select("status", "Status", STATUS_OPTIONS)
+ui.input_date("date", "Application Date", value=datetime.now().strftime("%Y-%m-%d"))
+ui.input_action_button("submit_btn", "Submit Application")
+
+@reactive.effect
+@reactive.event(lambda: input.submit_btn())
+def submit():
+    # Check for anything blank
+    if not input.company() or not input.position() or not input.link() or not input.status() or not input.date():
+        ui.notification_show("Please fill in all fields.", type="error")
+        return
+    append_application(
+        input.company(),
+        input.position(),
+        input.link(),
+        input.status(),
+        input.date()
+    )
+    # Reset all inputs
+    ui.update_text("company", value="")
+    ui.update_text("position", value="")
+    ui.update_text("link", value="")
+    ui.update_select("status", selected="Applied")  # Reset to default status
+    ui.update_date("date", value=datetime.now().strftime("%Y-%m-%d"))  # Reset to current date
+    ui.notification_show("Application added successfully!", type="message")
+```
